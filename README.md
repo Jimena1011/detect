@@ -35,3 +35,19 @@ Desarrollar un sistema capaz de:
 
 El desarrollo del proyecto se realizó mediante **versiones incrementales**, con el fin de
 no perder avances y poder analizar los resultados de cada enfoque.
+
+## Limitaciones actuales
+
+- La **estimación de velocidad real** depende fuertemente del ángulo de la cámara.
+- La homografía requiere recalibración para cada escenario.
+- Cambios pequeños en la grabación afectan los resultados.
+- No existe aún un método universal y confiable para todos los videos.
+
+---
+
+## Ejecución básica
+
+Ejemplo general:
+
+```bash
+python predict1.py model=yolov8l.pt source="pavas_1.MOV" show=True
