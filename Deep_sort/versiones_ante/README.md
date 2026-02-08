@@ -4,7 +4,7 @@ Esta carpeta contiene **versiones intermedias y experimentales** del sistema de
 detección, seguimiento, conteo y estimación de velocidad.
 ---
 
-## 📂 Descripción de cada archivo
+## Descripción de cada archivo
 
 ---
 

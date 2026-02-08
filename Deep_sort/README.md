@@ -10,7 +10,7 @@ la estabilidad de versiones previas.
 
 ---
 
-## 📌 Scripts base del proyecto
+## Scripts base del proyecto
 
 ### 1. `predict_base.py` — Versión base estable
 
