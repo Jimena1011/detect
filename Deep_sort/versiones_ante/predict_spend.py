@@ -1,14 +1,12 @@
-
 # Ultralytics YOLO 🚀, GPL-3.0 license
 
 import hydra
 import torch
 import argparse
 import time
-from pathlib import Path
 import os
-import sys
-
+from pathlib import Path
+import math
 import cv2
 import torch
 import torch.backends.cudnn as cudnn
@@ -18,40 +16,34 @@ from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 
+import cv2
 from deep_sort_pytorch.utils.parser import get_config
 from deep_sort_pytorch.deep_sort import DeepSort
 from collections import deque
 import numpy as np
-import psycopg2
-from datetime import datetime
-
 palette = (2 ** 11 - 1, 2 ** 15 - 1, 2 ** 20 - 1)
 data_deque = {}
 
 deepsort = None
 
 object_counter = {}
+
 object_counter1 = {}
 
 line = [(100, 500), (1050, 500)]
 SOURCE_FPS = None
+speed_line_queue = {}
+def estimatespeed(Location1, Location2):
+    #Euclidean Distance Formula
+    d_pixel = math.sqrt(math.pow(Location2[0] - Location1[0], 2) + math.pow(Location2[1] - Location1[1], 2))
+    # defining thr pixels per meter
+    ppm = 8
+    d_meters = d_pixel/ppm
+    time_constant = 15*3.6
+    #distance = speed/time
+    speed = d_meters * time_constant
 
-# Configuración de la base de datos
-conn = psycopg2.connect(host="localhost", dbname="postgres", user="postgres", password="1606", port="5432")
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS prueba1 (
-    id SERIAL PRIMARY KEY,
-    clase varchar(255),
-    speed varchar(255),
-    way varchar (255),
-    fecha varchar(255),
-    camara varchar(255)
-);
-""")
-conn.commit()
-consulta = """INSERT INTO prueba1 (clase, speed, way, fecha, camara) VALUES (%s, %s, %s, %s, %s);"""
+    return int(speed)
 
 def get_source_fps(src_path):
     cap = cv2.VideoCapture(src_path)
@@ -62,18 +54,12 @@ def get_source_fps(src_path):
 def init_tracker():
     global deepsort
     cfg_deep = get_config()
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    yaml_path = base / "deep_sort_pytorch" / "configs" / "deep_sort.yaml"
-    cfg_deep.merge_from_file(str(yaml_path))
+    cfg_deep.merge_from_file("deep_sort_pytorch/configs/deep_sort.yaml")
 
-    deepsort = DeepSort(cfg_deep.DEEPSORT.REID_CKPT,
-                            max_dist=cfg_deep.DEEPSORT.MAX_DIST,
-                            min_confidence=cfg_deep.DEEPSORT.MIN_CONFIDENCE,
-                            nms_max_overlap=cfg_deep.DEEPSORT.NMS_MAX_OVERLAP,
-                            max_iou_distance=cfg_deep.DEEPSORT.MAX_IOU_DISTANCE,
-                            max_age=cfg_deep.DEEPSORT.MAX_AGE,
-                            n_init=cfg_deep.DEEPSORT.N_INIT,
-                            nn_budget=cfg_deep.DEEPSORT.NN_BUDGET,
+    deepsort= DeepSort(cfg_deep.DEEPSORT.REID_CKPT,
+                            max_dist=cfg_deep.DEEPSORT.MAX_DIST, min_confidence=cfg_deep.DEEPSORT.MIN_CONFIDENCE,
+                            nms_max_overlap=cfg_deep.DEEPSORT.NMS_MAX_OVERLAP, max_iou_distance=cfg_deep.DEEPSORT.MAX_IOU_DISTANCE,
+                            max_age=cfg_deep.DEEPSORT.MAX_AGE, n_init=cfg_deep.DEEPSORT.N_INIT, nn_budget=cfg_deep.DEEPSORT.NN_BUDGET,
                             use_cuda=True)
 ##########################################################################################
 def xyxy_to_xywh(*xyxy):
@@ -212,6 +198,7 @@ def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
         # create new buffer for new object
         if id not in data_deque:  
           data_deque[id] = deque(maxlen= 16)  # Reducido de 64 a 16 para mejor rendimiento
+          speed_line_queue[id] = []
         color = compute_color_for_labels(object_id[i])
         obj_name = names[object_id[i]]
         label = '{}{:d}'.format("", id) + ":"+ '%s' % (obj_name)
@@ -220,6 +207,8 @@ def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
         data_deque[id].appendleft(center)
         if len(data_deque[id]) >= 2:
           direction = get_direction(data_deque[id][0], data_deque[id][1])
+          object_speed = estimatespeed(data_deque[id][1], data_deque[id][0])
+          speed_line_queue[id].append(object_speed)
           if intersect(data_deque[id][0], data_deque[id][1], line[0], line[1]):
               cv2.line(img, line[0], line[1], (255, 255, 255), 3)
               if "South" in direction:
@@ -227,30 +216,16 @@ def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
                     object_counter[obj_name] = 1
                 else:
                     object_counter[obj_name] += 1
-                # Insertar en la base de datos
-                try:
-                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    camara = os.getenv("CAMARA_NAME", "Camara_defecto")
-                    cur.execute(consulta, (obj_name, "0.0", "Sur", fecha, camara))
-                    conn.commit()
-                    print(f"Datos insertados en BD: {obj_name}, Sur, {fecha}")
-                except Exception as e:
-                    print(f"Error al insertar datos en la base de datos: {e}")
-
               if "North" in direction:
                 if obj_name not in object_counter1:
                     object_counter1[obj_name] = 1
                 else:
                     object_counter1[obj_name] += 1
-                # Insertar en la base de datos
-                try:
-                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    camara = os.getenv("CAMARA_NAME", "Camara_defecto")
-                    cur.execute(consulta, (obj_name, "0.0", "Norte", fecha, camara))
-                    conn.commit()
-                    print(f"Datos insertados en BD: {obj_name}, Norte, {fecha}")
-                except Exception as e:
-                    print(f"Error al insertar datos en la base de datos: {e}")
+
+        try:
+            label = label + " " + str(sum(speed_line_queue[id])//len(speed_line_queue[id])) + "km/h"
+        except:
+            pass
         UI_box(box, img, label=label, color=color, line_thickness=2)
         # draw trail - optimizado: dibujar solo cada 2do punto
         for i in range(1, len(data_deque[id]), 2):  # Incremento de 2 = dibuja mitad de lineas
@@ -275,6 +250,10 @@ def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
         cv2.putText(img, 'Vehicles Leaving', (20, 35), 0, 0.7, [225, 255, 255], thickness=1, lineType=cv2.LINE_4)
         cv2.rectangle(img, (10, 55 + (idx*35)), (120, 85 + (idx*35)), [85, 45, 255], -1, cv2.LINE_4)
         cv2.putText(img, cnt_str1, (20, 75 + (idx*35)), 0, 0.8, [255, 255, 255], thickness=1, lineType=cv2.LINE_4)
+    
+    
+    
+    return img
 
 
 class DetectionPredictor(BasePredictor):
@@ -304,7 +283,7 @@ class DetectionPredictor(BasePredictor):
 
         return preds
 
-    def write_results(self, idx, preds, batch, *args, **kwargs):
+    def write_results(self, idx, preds, batch):
         t0 = time.time()
         p, im, im0 = batch
         all_outputs = []
@@ -315,11 +294,13 @@ class DetectionPredictor(BasePredictor):
         im0 = im0.copy()
         if self.webcam:  # batch_size >= 1
             log_string += f'{idx}: '
-            frame_idx = self.dataset.count
+            frame = self.dataset.count
         else:
-            frame_idx = getattr(self.dataset, 'frame', 0)
+            frame = getattr(self.dataset, 'frame', 0)
 
-        fps = getattr(self.dataset, 'fps', SOURCE_FPS)
+        self.data_path = p
+        save_path = str(self.save_dir / p.name)  # im.jpg
+        self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
         self.annotator = self.get_annotator(im0)
 
@@ -344,27 +325,25 @@ class DetectionPredictor(BasePredictor):
             xywh_bboxs.append(xywh_obj)
             confs.append([conf.item()])
             oids.append(int(cls))
-        
-        if len(xywh_bboxs) == 0:
-            outputs = np.empty((0, 5))
-        else:
-            xywhs = torch.tensor(xywh_bboxs, dtype=torch.float32)
-            confss = torch.tensor(confs, dtype=torch.float32)
-            outputs = deepsort.update(xywhs, confss, oids, im0)
-
+        xywhs = torch.Tensor(xywh_bboxs)
+        confss = torch.Tensor(confs)
+          
+        outputs = deepsort.update(xywhs, confss, oids, im0)
         if len(outputs) > 0:
             bbox_xyxy = outputs[:, :4]
             identities = outputs[:, -2]
             object_id = outputs[:, -1]
             
-            draw_boxes(im0, bbox_xyxy, self.model.names, object_id, identities)
+            draw_boxes(im0, bbox_xyxy, self.model.names, object_id,identities)
 
-        # Mostrar FPS y permitir salir con 'q'
+        # Mostrar FPS
         t1 = time.time()
         frame_time = max(t1 - t0, 1e-6)
         fps_actual = 1 / frame_time
         cv2.putText(im0, f"FPS: {fps_actual:.1f}", (20, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50, 255, 50), 2, cv2.LINE_4)
-        cv2.imshow("Conteo y Seguimiento de Vehiculos", im0)
+        
+        # Mostrar video y permite salir con 'q'
+        cv2.imshow("Estimacion de Velocidad y Conteo", im0)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("Proceso detenido por el usuario.")
             cv2.destroyAllWindows()
@@ -375,34 +354,19 @@ class DetectionPredictor(BasePredictor):
 
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
 def predict(cfg):
-    cfg.conf = 0.50
-
-    # ====== COMENTADO: Desactivar guardado de video para mejorar rendimiento ======
-    cfg.save = False  # Desactiva el guardado automático de videos procesados
-    # ============================================================================
-
     init_tracker()
     cfg.model = cfg.model or "yolov8n.pt"
     cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
-    src_env = os.getenv("VIDEO_SOURCE")
-
-    if src_env and str(src_env).strip():
-        cfg.source = src_env
-    else:
-        cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
-
+    cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
+    cfg.save = False  # Desactiva el guardado automático de videos procesados
+    predictor = DetectionPredictor(cfg)
     global SOURCE_FPS
-    if isinstance(cfg.source, (str, os.PathLike)) and os.path.exists(str(cfg.source)):
+    if cfg.source and Path(cfg.source).is_file():
         SOURCE_FPS = get_source_fps(str(cfg.source))
     else:
         SOURCE_FPS = float(os.getenv("CAM_FPS", 30.0))
-    
-    print("FPS de la fuente:", SOURCE_FPS)
-    
-    predictor = DetectionPredictor(cfg)
     predictor()
 
 
 if __name__ == "__main__":
     predict()
-

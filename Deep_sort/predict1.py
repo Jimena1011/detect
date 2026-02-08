@@ -32,10 +32,20 @@ import os
 import sys
 
 
+SOURCE_FPS = None
+
+def get_source_fps(src_path):
+    cap = cv2.VideoCapture(src_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    return fps if fps and fps > 0 else None
+
+
 
 # Configuración de la base de datos
 conn = psycopg2.connect(host="localhost", dbname="postgres", user="postgres", password="1606", port="5432")
 cur = conn.cursor()
+
 
 cur.execute("""
 CREATE TABLE IF NOT EXISTS prueba7 (
@@ -164,14 +174,14 @@ def UI_box(x, img, color=None, label=None, line_thickness=None):
     tl = line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
     color = color or [random.randint(0, 255) for _ in range(3)]
     c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
-    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_4)
     if label:
         tf = max(tl - 1, 1)  # font thickness
         t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
 
-        img = draw_border(img, (c1[0], c1[1] - t_size[1] -3), (c1[0] + t_size[0], c1[1]+3), color, 1, 8, 2)
+        cv2.rectangle(img, (c1[0], c1[1] - t_size[1] - 3), (c1[0] + t_size[0], c1[1] + 3), color, -1, cv2.LINE_4)
 
-        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
+        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_4)
 
 
 def intersect(A,B,C,D):
@@ -277,29 +287,27 @@ def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
             pass
         UI_box(box, img, label=label, color=color, line_thickness=2)
         #    draw trail
-        for i in range(1, len(data_deque[id])):
+        for i in range(1, len(data_deque[id]), 2):
             #check if on buffer value is none
             if data_deque[id][i - 1] is None or data_deque[id][i] is None:
                 continue
-            #generate dynamic thickness of trails
-            thickness = int(np.sqrt(64 / float(i + i)) * 1.5)
-            #draw trails
-            cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, thickness)
+            #thickness constante para mejor rendimiento
+            cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, 1)
     
     #4. Display Count in top right corner
-        for idx, (key, value) in enumerate(object_counter1.items()):
-              cnt_str = str(key) + ":" +str(value)
-              cv2.line(img, (width - 500, 90), (width,90), [85,45,255], 30)
-              cv2.putText(img, f'Number of Vehicles Entering', (width - 500, 95), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
-              cv2.line(img, (width - 250, 125 + (idx*40)), (width - 50, 125 + (idx*40)), [85, 45, 255], 30)
-              cv2.putText(img, cnt_str, (width - 250, 125 + (idx*40)), 0, 1, [255, 255, 255], thickness = 2, lineType = cv2.LINE_AA)
+    for idx, (key, value) in enumerate(object_counter1.items()):
+        cnt_str = str(key) + ":" + str(value)
+        cv2.rectangle(img, (width - 500, 65), (width, 95), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, f'Vehicles Entering', (width - 490, 85), 0, 0.7, [225, 255, 255], thickness=1, lineType=cv2.LINE_4)
+        cv2.rectangle(img, (width - 250, 125 + (idx*40)), (width - 50, 155 + (idx*40)), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, cnt_str, (width - 240, 145 + (idx*40)), 0, 0.8, [255, 255, 255], thickness=1, lineType=cv2.LINE_4)
 
-        for idx, (key, value) in enumerate(object_counter.items()):
-              cnt_str1 = str(key) + ":" +str(value)
-              cv2.line(img, (20,25), (500,25), [85,45,255], 40)
-              cv2.putText(img, f'Numbers of Vehicles Leaving', (11, 35), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)    
-              cv2.line(img, (20,65+ (idx*40)), (127,65+ (idx*40)), [85,45,255], 30)
-              cv2.putText(img, cnt_str1, (11, 75+ (idx*40)), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
+    for idx, (key, value) in enumerate(object_counter.items()):
+        cnt_str1 = str(key) + ":" + str(value)
+        cv2.rectangle(img, (10, 65), (490, 95), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, f'Vehicles Leaving', (20, 85), 0, 0.7, [225, 255, 255], thickness=1, lineType=cv2.LINE_4)
+        cv2.rectangle(img, (10, 125 + (idx*40)), (120, 155 + (idx*40)), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, cnt_str1, (20, 145 + (idx*40)), 0, 0.8, [255, 255, 255], thickness=1, lineType=cv2.LINE_4)
     
     return img
 
@@ -392,7 +400,7 @@ class DetectionPredictor(BasePredictor):
         #cv2.putText(im0, f"Frame time: {frame_time:.3f}s", (20, 270), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50,255,50), 3)
         cv2.putText(im0, f"FPS: {fps:.1f}", (20, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50,255,50), 3)
         #cv2.putText(im0, f"Tiempo total: {tiempo_transcurrido:.1f}s", (20, 340), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,50,50), 3)
-        #cv2.imshow("Seguimiento y conteo", im0)
+        cv2.imshow("Seguimiento y conteo", im0)
         if cv2.waitKey(1) & 0xFF == ord('q'):  # presiona 'q' para salir
            print("Proceso detenido por el usuario.")
            cv2.destroyAllWindows()
@@ -407,9 +415,16 @@ def predict(cfg):
     cfg.model = cfg.model or "yolov8n.pt"
     cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
     cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
+    cfg.save = False  # Desactiva el guardado automático de videos procesados
+
+    global SOURCE_FPS
+    if isinstance(cfg.source, (str, os.PathLike)) and os.path.exists(str(cfg.source)):
+        SOURCE_FPS = get_source_fps(str(cfg.source))
+    else:
+        SOURCE_FPS = float(os.getenv("CAM_FPS", 30.0))
+
     predictor = DetectionPredictor(cfg)
     predictor()
-    cfg.show = True 
 
     print("¿CUDA disponible para torch?:", torch.cuda.is_available())
     

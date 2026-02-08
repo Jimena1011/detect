@@ -1,10 +1,10 @@
+
 # Ultralytics YOLO 🚀, GPL-3.0 license
-#predict
+#dst
 #Camara 1
-#adraw trail
+#center
 #postprocess
-#enumerate
-#cv2.VideoCapture
+#estimatespeed
 import hydra
 import torch
 import argparse
@@ -25,7 +25,6 @@ from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 import psycopg2
 from datetime import datetime
 
-
 from omegaconf import ListConfig
 
 import cv2
@@ -37,28 +36,6 @@ import os
 import sys
 
 
-#Para odtimizar
-from threading import Thread
-import queue
-import traceback
-torch.backends.cudnn.benchmark = True   # hace autotune para tamaños de input repetidos
-torch.backends.cudnn.enabled = True
-
-# Evitar gradientes en todo el proceso de predicción
-torch.set_grad_enabled(False)
-
-frame_queue = queue.Queue(maxsize=8)
-stop_flag = False
-
-def frame_reader(src, q):
-    cap = cv2.VideoCapture(src)
-    while not stop_flag:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if not q.full():
-            q.put(frame)
-    cap.release()
 
 # Configuración de la base de datos
 conn = psycopg2.connect(host="localhost", dbname="postgres", user="postgres", password="1606", port="5432")
@@ -87,41 +64,48 @@ object_counter = {}
 object_counter1 = {}
 speed_line_queue = {}
 
-line = [(300, 750), (1850, 550)]
-line_1 = [(890,430),(1080,430)]  
-line_2 = [(640,800),(1200,800)]
-
-SOURCE_FPS = None
-def get_source_fps(src_path):
-    cap = cv2.VideoCapture(src_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
-    return fps if fps and fps > 0 else None
+line = [(100, 550), (1250, 550)]
+#line_1 = [(709,390),(895,390)]  
+#line_2 = [(660,590),(1050,600)]
 
 ###########Parte de la homografica#########################
 #Pixeles 
-src = np.array([[890,430],
-                [1080,430],
-                [1200,600],
-                [640,800],
-                ], dtype=np.float32)  # Puntos en la imagen (pixeles)
-L = 27.69  # Largo en metro
-W = 6.68   # Ancho en metros 
-dst = np.array([[0.0,0],
-                [L,0.0],
-                [L,W],
-                [0.0,W],
-                ], dtype=np.float32)  # Puntos en el mundo real (metros)
+src = np.array([
+    [890, 430],
+    [1080, 430],
+    [1200, 600],
+    [640, 800],
+], dtype=np.float32)
+L = 27.34  # Largo en metro
+W = 6.14   # Ancho en metros 
+dst = np.array([
+    [0.0, 0.0],
+    [L,   0.0],
+    [L,   W  ],
+    [0.0, W  ],
+], dtype=np.float32)
 H = cv2.getPerspectiveTransform(src, dst)  
 def pix_to_world(pt_xy):
     P = np.array([[pt_xy]], dtype=np.float32)
     Wp = cv2.perspectiveTransform(P, H)[0,0]
     return float(Wp[0]), float(Wp[1])
-speed_state = {}   # id -> {"p": (X,Y), "f": frame_idx}
+speed_state = {}   # id -> {"p": (X,Y), "t": time.time()}
 speed_ema   = {}   # id -> EMA de km/h
 EMA_ALPHA   = 0.3  # suavizado (0.2–0.4 suele ir bien)
 
 
+def estimatespeed(Location1, Location2):
+    #Euclidean Distance Formula
+    d_pixel = math.sqrt(math.pow(Location2[0] - Location1[0], 2) + math.pow(Location2[1] - Location1[1], 2))
+    # defining theq pixels per meter
+    ppm = 10
+    d_meters = d_pixel/ppm
+    time_constant = 15*3.6
+    #distance = speed/time
+    speed = d_meters * time_constant
+
+
+    return int(speed)
 def init_tracker():
     global deepsort
     cfg_deep = get_config()
@@ -209,25 +193,19 @@ def draw_border(img, pt1, pt2, color, thickness, r, d):
     
     return img
 
-
 def UI_box(x, img, color=None, label=None, line_thickness=None):
-    # No dibuja nada: sin rectángulos, sin cartelitos
-    return
-
-#def UI_box(x, img, color=None, label=None, line_thickness=None):
     # Plots one bounding box on image img
-    #tl = line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
-    #color = color or [random.randint(0, 255) for _ in range(3)]
-    #c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
-    #cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
-    #if label:
-        #tf = max(tl - 1, 1)  # font thickness
-        #t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
+    tl = line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1  # line/font thickness
+    color = color or [random.randint(0, 255) for _ in range(3)]
+    c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
+    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
+    if label:
+        tf = max(tl - 1, 1)  # font thickness
+        t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
 
-        #img = draw_border(img, (c1[0], c1[1] - t_size[1] -3), (c1[0] + t_size[0], c1[1]+3), color, 1, 8, 2)
+        img = draw_border(img, (c1[0], c1[1] - t_size[1] -3), (c1[0] + t_size[0], c1[1]+3), color, 1, 8, 2)
 
-        #cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
-
+        cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, [225, 255, 255], thickness=tf, lineType=cv2.LINE_AA)
 
 
 def intersect(A,B,C,D):
@@ -257,19 +235,24 @@ def get_direction(point1, point2):
         direction_str += ""
 
     return direction_str
-#def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
-def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame_idx=None, fps=None):
+def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
     cv2.line(img, line[0], line[1], (46,162,112), 3)
-    cv2.line(img, line_1[0], line_1[1], (46,162,112), 3)
-    cv2.line(img, line_2[0], line_2[1], (46,162,112), 3)
 
+        # Dibujar el área de medición de homografía
+    cv2.line(img, tuple(src[0].astype(int)), tuple(src[1].astype(int)), (255, 0, 0), 2)
+    cv2.line(img, tuple(src[1].astype(int)), tuple(src[2].astype(int)), (255, 0, 0), 2)
+    cv2.line(img, tuple(src[2].astype(int)), tuple(src[3].astype(int)), (255, 0, 0), 2)
+    cv2.line(img, tuple(src[3].astype(int)), tuple(src[0].astype(int)), (255, 0, 0), 2)
 
     height, width, _ = img.shape
     # remove tracked point from buffer if object is lost
+    # remove tracked point from buffer if object is lost
     for key in list(data_deque):
-      if key not in identities:
-        data_deque.pop(key)
-        speed_line_queue.pop(key, None)
+        if key not in identities:
+            data_deque.pop(key)
+            speed_line_queue.pop(key, None)
+            speed_state.pop(key, None)
+            speed_ema.pop(key, None)
 
     for i, box in enumerate(bbox):
         x1, y1, x2, y2 = [int(i) for i in box]
@@ -279,61 +262,66 @@ def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame
         y2 += offset[1]
 
         # code to find center of bottom edge
-        center = (int((x2+x1)/ 2), int((y2)))
+        center = (int((x2+x1)/ 2), int((y2+y2)/2))
 
         # get ID of object
         id = int(identities[i]) if identities is not None else 0
-        if identities is not None:
-            current_ids = set(int(x) for x in identities)
-            for k in list(speed_state.keys()):
-                if k not in current_ids:
-                    speed_state.pop(k, None)
-                    speed_ema.pop(k, None)
 
-
-        # --- Asegura estructuras antes de usarlas ---
-        if id not in data_deque:
-            data_deque[id] = deque(maxlen=16)
-        if id not in speed_line_queue:
-            speed_line_queue[id] = []
-
-        color = compute_color_for_labels(object_id[i])
-        obj_name = names[object_id[i]]
-        label = f"{id}:{obj_name}"
-
-        # calcula velocidad usando homografía
-        now = None #ya no se usa time.time ()
+        now = time.time()
         world_pt = pix_to_world(center)
-
         prev = speed_state.get(id)
 
-        if prev is not None and fps and fps > 0 and ("f" in prev):
-            df = max(1, frame_idx - prev["f"])  # delta de frames (>=1)
-            dt = df / fps                       # segundos de video reales
-            dx = world_pt[0] - prev["p"][0]
-            dy = world_pt[1] - prev["p"][1]
-            d_m = math.hypot(dx, dy)
-            v_kmh_inst = (d_m / dt) * 3.6
-            v_prev = speed_ema.get(id, v_kmh_inst)
-            v_kmh = EMA_ALPHA * v_kmh_inst + (1.0 - EMA_ALPHA) * v_prev
-            v_kmh = max(0.0, min(v_kmh, 300.0))
-            speed_ema[id] = v_kmh
-            object_speed = v_kmh
+        if prev is not None:
+            dt = now - prev["t"]
+            if dt > 1e-3:
+                dx = world_pt[0] - prev["p"][0]
+                dy = world_pt[1] - prev["p"][1]
+                d_m = math.hypot(dx, dy)
+                v_kmh_inst = (d_m / dt) * 3.6
+                # EMA para suavizar
+                if id in speed_ema:
+                    v_kmh = EMA_ALPHA * v_kmh_inst + (1.0 - EMA_ALPHA) * speed_ema[id]
+                else:
+                    v_kmh = v_kmh_inst
+                
+                speed_ema[id] = v_kmh
+                object_speed = int(max(0, min(v_kmh, 300)))  # clamp entre 0 y 300 km/h
+            else:
+                object_speed = 0
         else:
-            object_speed = 0.0
+            object_speed = 0
 
-            # actualiza estado
-        speed_state[id] = {"p": world_pt, "f": frame_idx}
+        # actualiza estado
+        speed_state[id] = {"p": world_pt, "t": now}
 
-        # (sigue igual) acumulas para promedio mostrado
+        # Guardar para mostrar (usando la velocidad calculada con homografía)
+        if id not in speed_line_queue:
+            speed_line_queue[id] = []
         speed_line_queue[id].append(object_speed)
-        # add center to buffer (para dirección / trails)
-        data_deque[id].appendleft(center)
 
+        # create new buffer for new object
+        if id not in data_deque:  
+          data_deque[id] = deque(maxlen= 16)
+          #speed_line_queue[id] = []
+        color = compute_color_for_labels(object_id[i])
+        obj_name = names[object_id[i]]
+        #label = '{}{:d}'.format("", id) + ":"+ '%s' % (obj_name)
+        try:
+            avg_speed = sum(speed_line_queue[id]) // len(speed_line_queue[id])
+            label = f'{id}:{obj_name} {avg_speed}km/h'
+        except:
+            label = f'{id}:{obj_name}'
+
+        # add center to buffer
+        data_deque[id].appendleft(center)
         if len(data_deque[id]) >= 2:
           direction = get_direction(data_deque[id][0], data_deque[id][1])
+          #object_speed = estimatespeed(data_deque[id][1], data_deque[id][0])
+          #speed_line_queue[id].append(object_speed)
           if intersect(data_deque[id][0], data_deque[id][1], line[0], line[1]):
               cv2.line(img, line[0], line[1], (255, 255, 255), 3)
+
+              
               if "Sur" in direction:
                 print(f"Intentando insertar: {obj_name}, {object_speed}, Sur")
                 if obj_name not in object_counter:
@@ -366,20 +354,19 @@ def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame
                     print("Error al insertar datos en la base de datos:", e)
 
         try:
-            avg_spd = sum(speed_line_queue[id]) / max(1, len(speed_line_queue[id]))
-            label = f"{label} {avg_spd:.1f} km/h"
-        except Exception:
+            label = label + " " + str(sum(speed_line_queue[id])//len(speed_line_queue[id])) + "km/h"
+        except:
             pass
         UI_box(box, img, label=label, color=color, line_thickness=2)
         #    draw trail
-        #for i in range(1, len(data_deque[id])):
+        for i in range(1, len(data_deque[id])):
             #check if on buffer value is none
-            #if data_deque[id][i - 1] is None or data_deque[id][i] is None:
-                #continue
+            if data_deque[id][i - 1] is None or data_deque[id][i] is None:
+                continue
             #generate dynamic thickness of trails
-            #thickness = int(np.sqrt(64 / float(i + i)) * 1.5)
+            thickness = int(np.sqrt(64 / float(i + i)) * 1.5)
             #draw trails
-            #cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, thickness)
+            cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, thickness)
     
     #4. Display Count in top right corner
         for idx, (key, value) in enumerate(object_counter1.items()):
@@ -414,16 +401,11 @@ class DetectionPredictor(BasePredictor):
         return img
     #Aqui se hace el precesaieto de los resultados
     def postprocess(self, preds, img, orig_img, classes=None):
-        with torch.inference_mode():
-            with torch.cuda.amp.autocast(enabled=(self.model.device.type == "cuda")):
-                preds = self.model(img)
-        preds = ops.non_max_suppression(
-            preds,
-            self.args.conf,
-            self.args.iou,
-            agnostic=self.args.agnostic_nms,
-            max_det=self.args.max_det
-        )
+        preds = ops.non_max_suppression(preds,
+                                        self.args.conf, #Umbral de confianza
+                                        self.args.iou,
+                                        agnostic=self.args.agnostic_nms,
+                                        max_det=self.args.max_det)
 
         for i, pred in enumerate(preds):
             shape = orig_img[i].shape if self.webcam else orig_img.shape
@@ -442,11 +424,10 @@ class DetectionPredictor(BasePredictor):
         im0 = im0.copy()
         if self.webcam:  # batch_size >= 1
             log_string += f'{idx}: '
-            frame_idx = self.dataset.count
+            frame = self.dataset.count
         else:
-            frame_idx = getattr(self.dataset, 'frame', 0)
-            
-        fps = getattr(self.dataset, 'fps', SOURCE_FPS)
+            frame = getattr(self.dataset, 'frame', 0)
+
        # self.data_path = p
        # save_path = str(self.save_dir / p.name)  # im.jpg
        # self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
@@ -487,8 +468,7 @@ class DetectionPredictor(BasePredictor):
             identities = outputs[:, -2]
             object_id = outputs[:, -1]
             
-            draw_boxes(im0, bbox_xyxy, self.model.names, object_id, identities, offset=(0,0), frame_idx=frame_idx, fps=fps)
-            #draw_boxes(im0, bbox_xyxy, self.model.names, object_id,identities)
+            draw_boxes(im0, bbox_xyxy, self.model.names, object_id,identities)
             #tiempo de procesamiento
         t1 = time.time()  # <-- FINAL TIMER
         frame_time = max(t1 - t0, 1e-6)
@@ -502,25 +482,9 @@ class DetectionPredictor(BasePredictor):
         if cv2.waitKey(1) & 0xFF == ord('q'):  # presiona 'q' para salir
            print("Proceso detenido por el usuario.")
            cv2.destroyAllWindows()
-           stop_flag = True
            exit()
 
         return log_string
-    
-    def __call__(self):
-        global stop_flag
-        idx = 0
-        while not stop_flag:
-            if frame_queue.empty():
-                time.sleep(0.01)
-                continue
-            frame = frame_queue.get()
-            # Procesa el frame aquí
-            img = self.preprocess(frame)
-            orig_img = frame.copy()
-            preds = self.postprocess(None, img, orig_img)
-            self.write_results(idx, preds, (None, img, orig_img))
-            idx += 1
 
 #@hydra.main(version_base=None, config_path=str(ROOT / "yolo" / "cfg"), config_name="default")
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
@@ -535,90 +499,21 @@ def predict(cfg):
         cfg.source = src_env
     else:
         cfg.source = cfg.source if cfg.source is not None else ROOT / "assets"
-
-    global SOURCE_FPS
-    if isinstance(cfg.source, (str, os.PathLike)) and os.path.exists(str(cfg.source)):
-        SOURCE_FPS = get_source_fps(str(cfg.source))
-    else:
-        SOURCE_FPS = float(os.getenv("CAM_FPS", 30.0))
-    print("FPS de la fuente:", SOURCE_FPS)
-
-    global stop_flag
-    t = Thread(target=frame_reader, args=(cfg.source, frame_queue), daemon=True)
-    t.start()
-
     predictor = DetectionPredictor(cfg)
-    # Verifica que el modelo esté cargado
-    if predictor.model is None:
-        from ultralytics import YOLO
-        predictor.model = YOLO(cfg.model)  # Carga el modelo desde el archivo .pt
-
-    # Mover modelo a CUDA y half precision
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    predictor.model = predictor.model.to(device)
-    try:
-        predictor.model.model = predictor.model.model.to(device)
-    except Exception:
-        pass
-
-    # Forzar half precision si está en CUDA
-    if device == "cuda":
-        try:
-            predictor.model.model.half()
-        except Exception:
-            pass
-        imgsz = cfg.imgsz
-        # CORRECCIÓN: convierte imgsz a entero o tupla
-        if isinstance(imgsz, (ListConfig, list)):
-            if len(imgsz) == 1:
-                imgsz = int(imgsz[0])
-                dummy = torch.zeros((1, 3, imgsz, imgsz), device=device)
-            elif len(imgsz) == 2:
-                imgsz = tuple(map(int, imgsz))
-                dummy = torch.zeros((1, 3, imgsz[0], imgsz[1]), device=device)
-            else:
-                raise ValueError("cfg.imgsz debe ser un entero o una lista/tupla de 1 o 2 elementos.")
-        else:
-            dummy = torch.zeros((1, 3, int(imgsz), int(imgsz)), device=device)
-        for _ in range(5):
-            with torch.inference_mode():
-                # Usa el modelo subyacente de PyTorch para el pre-warm
-                with torch.cuda.amp.autocast(enabled=(device=="cuda")):
-                    if hasattr(predictor.model, "model"):
-                        _ = predictor.model.model(dummy)
-                    else:
-                        print("Advertencia: predictor.model.model no existe, no se puede hacer pre-warm.")
-
+    predictor()
     cfg.show = True 
 
-# Pre-warm y verificación de dispositivo
-    model_torch = getattr(predictor.model, "model", predictor.model)
-    if hasattr(model_torch, "to") and hasattr(model_torch, "parameters"):
-        model_torch = model_torch.to(device)
-        if device == "cuda":
-            try:
-                model_torch.half()
-            except Exception:
-                pass
-        imgsz = cfg.imgsz
-        if isinstance(imgsz, (ListConfig, list)):
-            if len(imgsz) == 1:
-                imgsz = int(imgsz[0])
-                dummy = torch.zeros((1, 3, imgsz, imgsz), device=device)
-            elif len(imgsz) == 2:
-                imgsz = tuple(map(int, imgsz))
-                dummy = torch.zeros((1, 3, imgsz[0], imgsz[1]), device=device)
-            else:
-                raise ValueError("cfg.imgsz debe ser un entero o una lista/tupla de 1 o 2 elementos.")
-        else:
-            dummy = torch.zeros((1, 3, int(imgsz), int(imgsz)), device=device)
-        for _ in range(5):
-            with torch.inference_mode():
-                with torch.cuda.amp.autocast(enabled=(device=="cuda")):
-                    _ = model_torch(dummy)
-        print("Dispositivo YOLO:", next(model_torch.parameters()).device)
-    else:
-        print("No se pudo acceder al modelo PyTorch para pre-warm o verificación de dispositivo.")
+    print("¿CUDA disponible para torch?:", torch.cuda.is_available())
+    
+    # Verifica si el modelo YOLO está en CUDA (si tienes acceso al modelo, depende de la API)
+    try:
+        print("Dispositivo YOLO:", next(predictor.model.model.parameters()).device)
+    except AttributeError:
+        try:
+            print("Dispositivo YOLO:", next(predictor.model.parameters()).device)
+        except Exception as e:
+            print(f"No se pudo acceder al dispositivo YOLO: {e}")
+    
 
 if __name__ == "__main__":
     predict()

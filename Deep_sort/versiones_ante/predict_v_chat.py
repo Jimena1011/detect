@@ -1,10 +1,9 @@
 # Ultralytics YOLO 🚀, GPL-3.0 license
-#queue
+#predict
 #Camara 1
-#adraw trail
+#avg_spd
 #postprocess
-#postprocess 
-#self.model.names
+#self.data_path
 import hydra
 import torch
 import argparse
@@ -16,7 +15,6 @@ import torch
 import torch.backends.cudnn as cudnn
 from numpy import random
 from omegaconf import DictConfig
-from ultralytics import YOLO
 #importa yolo desde ultralytics save
 from ultralytics.yolo.engine.predictor import BasePredictor
 from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
@@ -25,7 +23,6 @@ from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 
 import psycopg2
 from datetime import datetime
-
 
 from omegaconf import ListConfig
 
@@ -37,42 +34,6 @@ import numpy as np
 import os
 import sys
 
-
-#Para odtimizar
-from threading import Thread
-import queue
-import traceback
-torch.backends.cudnn.benchmark = True   # hace autotune para tamaños de input repetidos
-torch.backends.cudnn.enabled = True
-
-# Evitar gradientes en todo el proceso de predicción
-torch.set_grad_enabled(False)
-
-frame_queue = queue.Queue(maxsize=1)
-stop_flag = False
-
-def frame_reader(src, q):
-    cap = cv2.VideoCapture(src)
-    # reduce buffer interno si el backend lo soporta
-    try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    except Exception:
-        pass
-    while not stop_flag:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        # bloquea hasta que haya lugar: así no se perderán frames
-        try:
-            q.put(frame, timeout=1)   # bloquea hasta que el consumidor lea
-        except queue.Full:
-            # si por alguna razón sigue full, podemos forzar reemplazo del más antiguo:
-            try:
-                q.get_nowait()        # tira el frame viejo (opcional)
-                q.put(frame, timeout=1)
-            except Exception:
-                pass
-    cap.release()
 
 # Configuración de la base de datos
 conn = psycopg2.connect(host="localhost", dbname="postgres", user="postgres", password="1606", port="5432")
@@ -101,7 +62,7 @@ object_counter = {}
 object_counter1 = {}
 speed_line_queue = {}
 
-line = [(300, 750), (1850, 550)]
+line = [(100, 550), (1250, 550)]
 line_1 = [(890,430),(1080,430)]  
 line_2 = [(640,800),(1200,800)]
 
@@ -225,7 +186,7 @@ def draw_border(img, pt1, pt2, color, thickness, r, d):
 
 
 def UI_box(x, img, color=None, label=None, line_thickness=None):
-    # No dibuja nada: sin rectángulos
+    # No dibuja nada: sin rectángulos, sin cartelitos
     return
 
 #def UI_box(x, img, color=None, label=None, line_thickness=None):
@@ -385,108 +346,58 @@ def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame
         except Exception:
             pass
         UI_box(box, img, label=label, color=color, line_thickness=2)
-        #    draw trail
-        #for i in range(1, len(data_deque[id])):
+        #    draw trail - optimizado: dibujar solo cada 2do punto
+        for i in range(1, len(data_deque[id]), 2):  # Incremento de 2 = dibuja mitad de lineas
             #check if on buffer value is none
-            #if data_deque[id][i - 1] is None or data_deque[id][i] is None:
-                #continue
-            #generate dynamic thickness of trails
-            #thickness = int(np.sqrt(64 / float(i + i)) * 1.5)
-            #draw trails
-            #cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, thickness)
+            if data_deque[id][i - 1] is None or data_deque[id][i] is None:
+                continue
+            #thickness constante para mejor rendimiento
+            cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, 1)
     
-    #4. Display Count in top right corner
-        for idx, (key, value) in enumerate(object_counter1.items()):
-              cnt_str = str(key) + ":" +str(value)
-              cv2.line(img, (width - 500, 90), (width,90), [85,45,255], 30)
-              cv2.putText(img, f'Number of Vehicles Entering', (width - 500, 95), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
-              cv2.line(img, (width - 250, 125 + (idx*40)), (width - 50, 125 + (idx*40)), [85, 45, 255], 30)
-              cv2.putText(img, cnt_str, (width - 250, 125 + (idx*40)), 0, 1, [255, 255, 255], thickness = 2, lineType = cv2.LINE_AA)
+    #4. Display Count in top right corner - OPTIMIZADO: fuera del loop principal
+    for idx, (key, value) in enumerate(object_counter1.items()):
+        cnt_str = str(key) + ":" + str(value)
+        cv2.rectangle(img, (width - 500, 65), (width, 95), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, f'Vehicles Entering', (width - 490, 85), 0, 0.7, [225, 255, 255], thickness=1, lineType=cv2.LINE_4)
+        cv2.rectangle(img, (width - 250, 125 + (idx*40)), (width - 50, 155 + (idx*40)), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, cnt_str, (width - 240, 145 + (idx*40)), 0, 0.8, [255, 255, 255], thickness=1, lineType=cv2.LINE_4)
 
-        for idx, (key, value) in enumerate(object_counter.items()):
-              cnt_str1 = str(key) + ":" +str(value)
-              cv2.line(img, (20,25), (500,25), [85,45,255], 40)
-              cv2.putText(img, f'Numbers of Vehicles Leaving', (11, 35), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)    
-              cv2.line(img, (20,65+ (idx*40)), (127,65+ (idx*40)), [85,45,255], 30)
-              cv2.putText(img, cnt_str1, (11, 75+ (idx*40)), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
+    for idx, (key, value) in enumerate(object_counter.items()):
+        cnt_str1 = str(key) + ":" + str(value)
+        cv2.rectangle(img, (10, 65), (490, 95), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, f'Vehicles Leaving', (20, 85), 0, 0.7, [225, 255, 255], thickness=1, lineType=cv2.LINE_4)
+        cv2.rectangle(img, (10, 125 + (idx*40)), (120, 155 + (idx*40)), [85, 45, 255], -1, cv2.LINE_4)
+        cv2.putText(img, cnt_str1, (20, 145 + (idx*40)), 0, 0.8, [255, 255, 255], thickness=1, lineType=cv2.LINE_4)
     
     return img
 
-# La clase especial para la integracion con el Deepsort
+#La clase especial para la integracion con el Deepsort
 class DetectionPredictor(BasePredictor):
     CLASS_ID = [0, 1, 2, 3, 5, 7]
 
-    def __init__(self, cfg):
-        super().__init__(cfg)
-        # Carga el modelo YOLO y asígnalo a self.model
-        self.model = YOLO(cfg.model)
-        self.seen = 0
-
-        # Obtener nombres de clases de forma robusta (compatibilidad entre versiones)
-        model_names = getattr(self.model, "names", None)
-        if model_names is None:
-            model_torch = getattr(self.model, "model", None)
-            model_names = getattr(model_torch, "names", None) if model_torch is not None else None
-        # fallback a lista vacía o dict para evitar errores posteriores
-        if model_names is None:
-            # puede ser útil imprimir para depuración
-            print("Warning: no se encontraron 'names' en el objeto YOLO; usando diccionario vacío.")
-            self.names = {}
-        else:
-            self.names = model_names
-
-        # Detecta si la fuente es webcam (número o string tipo '0')
-        src = str(cfg.source)
-        self.webcam = src.isdigit() or src.startswith("rtsp") or src.startswith("webcam")
 
     def get_annotator(self, img):
-        # ahora usamos self.names en lugar de self.model.names
-        return Annotator(img, line_width=self.args.line_thickness, example=str(self.names))
+        return Annotator(img, line_width=self.args.line_thickness, example=str(self.model.names))
 
     def preprocess(self, img):
-        # Obtén el modelo PyTorch real
-        imgsz = self.args.imgsz if hasattr(self, "args") and hasattr(self.args, "imgsz") else 640
-        if isinstance(imgsz, (ListConfig, list, tuple, np.ndarray)):
-            imgsz = int(imgsz[0])
-        else:
-            imgsz = int(imgsz)
-
-        img = cv2.resize(img, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR)
-
-        model_torch = getattr(self.model, "model", self.model)
-        device = next(model_torch.parameters()).device
-        img = torch.from_numpy(img).permute(2, 0, 1).to(device)
-        if img.device.type == "cuda":
-            img = img.half()
-        else:
-            img = img.float()
+        img = torch.from_numpy(img).to(self.model.device)
+        img = img.half() if self.model.fp16 else img.float()  # uint8 to fp16/32
         img /= 255  # 0 - 255 to 0.0 - 1.0
-        img = img.unsqueeze(0)  # Añade dimensión batch
         #print("¿CUDA disponible?:", torch.cuda.is_available())
         return img
-
-    # Aqui se hace el procesamiento de los resultados
+    #Aqui se hace el precesaieto de los resultados
     def postprocess(self, preds, img, orig_img, classes=None):
-        model_torch = getattr(self.model, "model", self.model)
-        with torch.inference_mode():
-            with torch.amp.autocast(device_type='cuda', enabled=(next(model_torch.parameters()).device.type == "cuda")):
-                preds = model_torch(img)
-        preds = ops.non_max_suppression(
-            preds,
-            self.args.conf,
-            self.args.iou,
-            agnostic=self.args.agnostic_nms,
-            max_det=self.args.max_det
-        )
+        preds = ops.non_max_suppression(preds,
+                                        self.args.conf, #Umbral de confianza
+                                        self.args.iou,
+                                        agnostic=self.args.agnostic_nms,
+                                        max_det=self.args.max_det)
 
         for i, pred in enumerate(preds):
-            shape = orig_img.shape
-            if pred is None or len(pred) == 0:
-                continue
+            shape = orig_img[i].shape if self.webcam else orig_img.shape
             pred[:, :4] = ops.scale_boxes(img.shape[2:], pred[:, :4], shape).round()
 
         return preds
-
     tiempo_inicio = time.time()  # Definir UNA SOLA VEZ al inicio imshow
     def write_results(self, idx, preds, batch, *args, **kwargs):
         t0 = time.time()
@@ -502,25 +413,21 @@ class DetectionPredictor(BasePredictor):
             frame_idx = self.dataset.count
         else:
             frame_idx = getattr(self.dataset, 'frame', 0)
-
+            
         fps = getattr(self.dataset, 'fps', SOURCE_FPS)
+       # self.data_path = p
+       # save_path = str(self.save_dir / p.name)  # im.jpg
+       # self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
         self.annotator = self.get_annotator(im0)
 
-        if idx >= len(preds):
-            print(f"Advertencia: idx={idx} fuera de rango para preds de tamaño {len(preds)}")
-            return log_string
         det = preds[idx]
         all_outputs.append(det)
-        if det is None or len(det) == 0:
+        if len(det) == 0:
             return log_string
-
-        # Usa self.names en lugar de self.model.names
         for c in det[:, 5].unique():
             n = (det[:, 5] == c).sum()  # detections per class
-            name = self.names[int(c)] if int(c) in self.names or (isinstance(self.names, list) and int(c) < len(self.names)) else str(int(c))
-            log_string += f"{n} {name}{'s' * (n > 1)}, "
-
+            log_string += f"{n} {self.model.names[int(c)]}{'s' * (n > 1)}, "
         # write
         gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
         xywh_bboxs = []
@@ -535,67 +442,39 @@ class DetectionPredictor(BasePredictor):
             xywh_bboxs.append(xywh_obj)
             confs.append([conf.item()])
             oids.append(int(cls))
-        if len(xywh_bboxs) == 0 or im0 is None or im0.size == 0:
-            outputs = np.empty((0,5))
-        else :
-            h, w = im0.shape[:2]
-            valid_xywhs = []
-            valid_confs = []
-            valid_oids = []
-            for bbox, conf, oid in zip (xywh_bboxs, confs, oids):
-                x_c, y_c, bbox_w, bbox_h = bbox
-                x1 = int(x_c - bbox_w /2)
-                y1 = int(y_c - bbox_h /2)
-                x2 = int(x_c + bbox_w /2)
-                y2 = int(y_c + bbox_h /2)
-                if x1 >= 0 and y1 >= 0 and x2 <= w and y2 <= h and x2 > x1 and y2 > y1:
-                    valid_xywhs.append(bbox)
-                    valid_confs.append(conf)
-                    valid_oids.append(oid)
-            if len(valid_xywhs) == 0:
-                outputs = np.empty((0,5))
-            else:
-                xywhs  = torch.tensor(valid_xywhs, dtype=torch.float32)
-                confss = torch.tensor(valid_confs, dtype=torch.float32)
-                outputs = deepsort.update(xywhs, confss, valid_oids, im0)
-                
+        if len(xywh_bboxs) == 0:
+            outputs = np.empty((0, 5))
+        else:
+            xywhs  = torch.tensor(xywh_bboxs, dtype=torch.float32)
+            confss = torch.tensor(confs,      dtype=torch.float32)
+            outputs = deepsort.update(xywhs, confss, oids, im0)
+          
+
         if len(outputs) > 0:
             bbox_xyxy = outputs[:, :4]
             identities = outputs[:, -2]
             object_id = outputs[:, -1]
-
-            # draw_boxes ahora recibe self.names
-            draw_boxes(im0, bbox_xyxy, self.names, object_id, identities, offset=(0,0), frame_idx=frame_idx, fps=fps)
-
-        t1 = time.time()  # <-- FINAL Tiempo
+            
+            draw_boxes(im0, bbox_xyxy, self.model.names, object_id, identities, offset=(0,0), frame_idx=frame_idx, fps=fps)
+            #draw_boxes(im0, bbox_xyxy, self.model.names, object_id,identities)
+            #tiempo de procesamiento
+        t1 = time.time()  # <-- FINAL TIMER
         frame_time = max(t1 - t0, 1e-6)
         fps = 1 / frame_time
-        tiempo_transcurrido = t1 - self.tiempo_inicio  # <-- Acceso a la variable global
-
+        tiempo_transcurrido =t1 - self.tiempo_inicio  # <-- Acceso a la variable global
+        # Ahora sí, dibuja el texto sobre el frame
+        #cv2.putText(im0, f"Frame time: {frame_time:.3f}s", (20, 270), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50,255,50), 3)
         cv2.putText(im0, f"FPS: {fps:.1f}", (20, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (50,255,50), 3)
+        #cv2.putText(im0, f"Tiempo total: {tiempo_transcurrido:.1f}s", (20, 340), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255,50,50), 3)
         cv2.imshow("Seguimiento y conteo", im0)
         if cv2.waitKey(1) & 0xFF == ord('q'):  # presiona 'q' para salir
            print("Proceso detenido por el usuario.")
            cv2.destroyAllWindows()
-           stop_flag = True
            exit()
 
         return log_string
 
-    def __call__(self):
-        global stop_flag
-        idx = 0
-        while not stop_flag:
-            # bloqueo hasta que frame esté disponible
-            frame = frame_queue.get()
-            if frame is None:
-                continue
-            img = self.preprocess(frame)
-            orig_img = frame.copy()
-            preds = self.postprocess(None, img, orig_img)
-            self.write_results(idx, preds, (None, img, orig_img))
-            idx += 1
-
+#@hydra.main(version_base=None, config_path=str(ROOT / "yolo" / "cfg"), config_name="default")
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
 def predict(cfg):
     cfg.conf = 0.50
@@ -603,7 +482,6 @@ def predict(cfg):
     cfg.model = cfg.model or "yolov8n.pt"
     cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
     src_env = os.getenv("VIDEO_SOURCE")
-
 
     if src_env and str(src_env).strip():
         cfg.source = src_env
@@ -617,22 +495,20 @@ def predict(cfg):
         SOURCE_FPS = float(os.getenv("CAM_FPS", 30.0))
     print("FPS de la fuente:", SOURCE_FPS)
 
-    global stop_flag
-    t = Thread(target=frame_reader, args=(cfg.source, frame_queue), daemon=True)
-    t.start()
-
     predictor = DetectionPredictor(cfg)
     predictor()
     cfg.show = True 
 
     print("¿CUDA disponible para torch?:", torch.cuda.is_available())
     
-    # Verifica si el modelo YOLO está en CUDA 
-    model_torch = getattr(predictor.model, "model", predictor.model)
+    # Verifica si el modelo YOLO está en CUDA (si tienes acceso al modelo, depende de la API)
     try:
-        print("Dispositivo YOLO:", next(model_torch.parameters()).device)
-    except Exception as e:
-        print(f"No se pudo acceder al dispositivo YOLO: {e}")
+        print("Dispositivo YOLO:", next(predictor.model.model.parameters()).device)
+    except AttributeError:
+        try:
+            print("Dispositivo YOLO:", next(predictor.model.parameters()).device)
+        except Exception as e:
+            print(f"No se pudo acceder al dispositivo YOLO: {e}")
     
 
 if __name__ == "__main__":

@@ -75,10 +75,10 @@ src = np.float32([[709,390],
                   [660,590]])  # Puntos en la imagen (pixeles)
 L = 27.34  # Largo en metro
 W = 6.14   # Ancho en metros 
-dst = np.array([[0,0],
-                [L,0],
-                [L,W],
-                [0,W]])  # Puntos en el mundo real (metros)
+dst = np.float32([[0,0],
+                  [L,0],
+                  [L,W],
+                  [0,W]])  # Puntos en el mundo real (metros)
 H = cv2.getPerspectiveTransform(src, dst)  
 def pix_to_world(pt_xy):
     P = np.array([[pt_xy]], dtype=np.float32)
