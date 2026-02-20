@@ -1,5 +1,4 @@
-
-# Ultralytics YOLO 🚀, GPL-3.0 license
+# Ultralytics YOLO 🚀, GPL-3.0 license 
 #predict
 #Camara 1
 #avg_spd
@@ -22,8 +21,6 @@ from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 
-import psycopg2
-from datetime import datetime
 
 from omegaconf import ListConfig
 
@@ -35,90 +32,60 @@ import numpy as np
 import os
 import sys
 
-
-
-# Configuración de la base de datos
-conn = psycopg2.connect(host="localhost", dbname="postgres", user="postgres", password="1606", port="5432")
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS prueba1 (
-    id SERIAL PRIMARY KEY,
-    clase varchar(255),
-    speed varchar(255),
-    way varchar (255),
-    fecha varchar(255),
-    camara varchar(255)
-);
-""")
-consulta = """INSERT INTO prueba1 (clase, speed, way, fecha, camara) VALUES (%s, %s, %s, %s, %s);"""
-
-
 palette = (2 ** 11 - 1, 2 ** 15 - 1, 2 ** 20 - 1)
 data_deque = {}
 
 deepsort = None
 
-object_counter = {}
-
-object_counter1 = {}
+# object counting removed (counters disabled/removed)
 speed_line_queue = {}
 
-line = [(100, 550), (1250, 550)]
-line_1 = [(890,430),(1080,430)]  
-line_2 = [(640,800),(1200,800)]
+line = [(150, 650), (1750, 550)]
+#line_1 = [(890,430),(1080,430)]  
+#line_2 = [(640,800),(1200,800)]
 
 SOURCE_FPS = None
+
+USE_SPEED = False
+
+
+# and set USE_SPEED = True.
+speed_state = {}
+speed_ema = {}
+EMA_ALPHA = 0.3
+
+def pix_to_world(pt):
+    """Fallback: return pixel coordinates when homography is not used.
+    This keeps code functional if homography mapping was removed.
+    """
+    # note: keep consistent numeric types (float) to avoid issues in math.hypot
+    return (float(pt[0]), float(pt[1]))
+
+def init_tracker():
+    """Initializes the DeepSort tracker and sets the global deepsort variable.
+    This follows the pattern from other detection scripts in this repo.
+    """
+    global deepsort
+    cfg_deep = get_config()
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    yaml_path = base / "deep_sort_pytorch" / "configs" / "deep_sort.yaml"
+    cfg_deep.merge_from_file(str(yaml_path))
+    deepsort = DeepSort(cfg_deep.DEEPSORT.REID_CKPT,
+                        max_dist=cfg_deep.DEEPSORT.MAX_DIST,
+                        min_confidence=cfg_deep.DEEPSORT.MIN_CONFIDENCE,
+                        nms_max_overlap=cfg_deep.DEEPSORT.NMS_MAX_OVERLAP,
+                        max_iou_distance=cfg_deep.DEEPSORT.MAX_IOU_DISTANCE,
+                        max_age=cfg_deep.DEEPSORT.MAX_AGE,
+                        n_init=cfg_deep.DEEPSORT.N_INIT,
+                        nn_budget=cfg_deep.DEEPSORT.NN_BUDGET,
+                        use_cuda=True)
 def get_source_fps(src_path):
     cap = cv2.VideoCapture(src_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
     return fps if fps and fps > 0 else None
 
-###########Parte de la homografica#########################
-#Pixeles 
-src = np.array([[890,430],
-                [1080,430],
-                [1200,600],
-                [640,800],
-                ], dtype=np.float32)  # Puntos en la imagen (pixeles)
-L = 27.69  # Largo en metro
-W = 6.68   # Ancho en metros 
-dst = np.array([[0.0,0],
-                [L,0.0],
-                [L,W],
-                [0.0,W],
-                ], dtype=np.float32)  # Puntos en el mundo real (metros)
-H = cv2.getPerspectiveTransform(src, dst)  
-def pix_to_world(pt_xy):
-    P = np.array([[pt_xy]], dtype=np.float32)
-    Wp = cv2.perspectiveTransform(P, H)[0,0]
-    return float(Wp[0]), float(Wp[1])
-speed_state = {}   # id -> {"p": (X,Y), "f": frame_idx}
-speed_ema   = {}   # id -> EMA de km/h
-EMA_ALPHA   = 0.3  # suavizado (0.2–0.4 suele ir bien)
 
-
-def init_tracker():
-    global deepsort
-    cfg_deep = get_config()
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    #linera anterior 
-    #base = Path(__file__).resolve().parent  # carpeta donde está predict.py
-    yaml_path = base / "deep_sort_pytorch" / "configs" / "deep_sort.yaml"
-    cfg_deep.merge_from_file(str(yaml_path))
-    deepsort= DeepSort(cfg_deep.DEEPSORT.REID_CKPT,
-                            max_dist=cfg_deep.DEEPSORT.MAX_DIST,
-                            min_confidence=cfg_deep.DEEPSORT.MIN_CONFIDENCE,
-                            nms_max_overlap=cfg_deep.DEEPSORT.NMS_MAX_OVERLAP,
-                            max_iou_distance=cfg_deep.DEEPSORT.MAX_IOU_DISTANCE,
-                            max_age=10,
-                            #max_age=cfg_deep.DEEPSORT.MAX_AGE,
-                            n_init=cfg_deep.DEEPSORT.N_INIT,
-                            nn_budget=cfg_deep.DEEPSORT.NN_BUDGET,
-                            use_cuda=True
-                            )
-################################################################################################################################################
 def xyxy_to_xywh(*xyxy):
     """" Calculates the relative bounding box from absolute pixel values. """
     bbox_left = min([xyxy[0].item(), xyxy[2].item()])
@@ -208,31 +175,11 @@ def ccw(A,B,C):
     return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
 
 
-def get_direction(point1, point2):
-    direction_str = ""
-
-    # calculate y axis direction
-    if point1[1] > point2[1]:
-        direction_str += "Sur"
-    elif point1[1] < point2[1]:
-        direction_str += "Norte"
-    else:
-        direction_str += ""
-
-    # calculate x axis direction
-    if point1[0] > point2[0]:
-        direction_str += "East"
-    elif point1[0] < point2[0]:
-        direction_str += "West"
-    else:
-        direction_str += ""
-
-    return direction_str
 #def draw_boxes(img, bbox, names,object_id, identities=None, offset=(0, 0)):
 def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame_idx=None, fps=None):
     cv2.line(img, line[0], line[1], (46,162,112), 3)
-    cv2.line(img, line_1[0], line_1[1], (46,162,112), 3)
-    cv2.line(img, line_2[0], line_2[1], (46,162,112), 3)
+  #  cv2.line(img, line_1[0], line_1[1], (46,162,112), 3)
+ #   cv2.line(img, line_2[0], line_2[1], (46,162,112), 3)
 
 
     height, width, _ = img.shape
@@ -272,75 +219,46 @@ def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame
         obj_name = names[object_id[i]]
         label = f"{id}:{obj_name}"
 
-        # calcula velocidad usando homografía
-        now = None #ya no se usa time.time ()
-        world_pt = pix_to_world(center)
+        # calcula velocidad usando homografía (optionally) - disabled by default
+        if USE_SPEED:
+            now = None # ya no se usa time.time ()
+            world_pt = pix_to_world(center)
 
-        prev = speed_state.get(id)
+            prev = speed_state.get(id)
 
-        if prev is not None and fps and fps > 0 and ("f" in prev):
-            df = max(1, frame_idx - prev["f"])  # delta de frames (>=1)
-            dt = df / fps                       # segundos de video reales
-            dx = world_pt[0] - prev["p"][0]
-            dy = world_pt[1] - prev["p"][1]
-            d_m = math.hypot(dx, dy)
-            v_kmh_inst = (d_m / dt) * 3.6
-            v_prev = speed_ema.get(id, v_kmh_inst)
-            v_kmh = EMA_ALPHA * v_kmh_inst + (1.0 - EMA_ALPHA) * v_prev
-            v_kmh = max(0.0, min(v_kmh, 300.0))
-            speed_ema[id] = v_kmh
-            object_speed = v_kmh
-        else:
-            object_speed = 0.0
+            if prev is not None and fps and fps > 0 and ("f" in prev):
+                df = max(1, frame_idx - prev["f"])  # delta de frames (>=1)
+                dt = df / fps                       # segundos de video reales
+                dx = world_pt[0] - prev["p"][0]
+                dy = world_pt[1] - prev["p"][1]
+                d_m = math.hypot(dx, dy)
+                v_kmh_inst = (d_m / dt) * 3.6
+                v_prev = speed_ema.get(id, v_kmh_inst)
+                v_kmh = EMA_ALPHA * v_kmh_inst + (1.0 - EMA_ALPHA) * v_prev
+                v_kmh = max(0.0, min(v_kmh, 300.0))
+                speed_ema[id] = v_kmh
+                object_speed = v_kmh
+            else:
+                object_speed = 0.0
 
             # actualiza estado
-        speed_state[id] = {"p": world_pt, "f": frame_idx}
+            speed_state[id] = {"p": world_pt, "f": frame_idx}
 
-        # (sigue igual) acumulas para promedio mostrado
-        speed_line_queue[id].append(object_speed)
+            # (sigue igual) acumulas para promedio mostrado
+            speed_line_queue[id].append(object_speed)
+        else:
+            # If homography/speed are disabled, keep consistent types and values.
+            object_speed = 0.0
         # add center to buffer (para dirección / trails)
         data_deque[id].appendleft(center)
 
-        if len(data_deque[id]) >= 2:
-          direction = get_direction(data_deque[id][0], data_deque[id][1])
-          if intersect(data_deque[id][0], data_deque[id][1], line[0], line[1]):
-              cv2.line(img, line[0], line[1], (255, 255, 255), 3)
-              if "Sur" in direction:
-                print(f"Intentando insertar: {obj_name}, {object_speed}, Sur")
-                if obj_name not in object_counter:
-                    object_counter[obj_name] = 1
-                else:
-                    object_counter[obj_name] += 1
-        #para insertar los datos en la base de datos
-                try: 
-                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    camara = os.getenv("CAMARA_NAME", "Camara_defecto")
-                    cur.execute(consulta, (obj_name, str(object_speed), "Sur",fecha, camara))
-                    #conn.commit()
-                    print("Datos insertados en la base de datos.")
-                except Exception as e:
-                    print("Error al insertar datos en la base de datos:", e)
-
-              if "Norte" in direction:
-                print("Intentando insertar Norte", obj_name, object_speed)
-                if obj_name not in object_counter1:
-                    object_counter1[obj_name] = 1
-                else:
-                    object_counter1[obj_name] += 1
-                try: 
-                    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    camara = os.getenv("CAMARA_NAME","Camara_defecto")
-                    cur.execute(consulta, (obj_name, str(object_speed), "Norte",fecha, camara))
-                    #conn.commit()
-                    print("Datos insertados en la base de datos.")
-                except Exception as e:
-                    print("Error al insertar datos en la base de datos:", e)
-
-        try:
-            avg_spd = sum(speed_line_queue[id]) / max(1, len(speed_line_queue[id]))
-            label = f"{label} {avg_spd:.1f} km/h"
-        except Exception:
-            pass
+        # Optionally show average speed if enabled; otherwise keep original label only.
+        if USE_SPEED:
+            try:
+                avg_spd = sum(speed_line_queue[id]) / max(1, len(speed_line_queue[id]))
+                label = f"{label} {avg_spd:.1f} km/h"
+            except Exception:
+                pass
         UI_box(box, img, label=label, color=color, line_thickness=2)
         #    draw trail
         for i in range(1, len(data_deque[id])):
@@ -353,25 +271,17 @@ def draw_boxes(img, bbox, names, object_id, identities=None, offset=(0,0), frame
             cv2.line(img, data_deque[id][i - 1], data_deque[id][i], color, thickness)
     
     #4. Display Count in top right corner
-        for idx, (key, value) in enumerate(object_counter1.items()):
-              cnt_str = str(key) + ":" +str(value)
-              cv2.line(img, (width - 500, 90), (width,90), [85,45,255], 30)
-              cv2.putText(img, f'Number of Vehicles Entering', (width - 500, 95), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
-              cv2.line(img, (width - 250, 125 + (idx*40)), (width - 50, 125 + (idx*40)), [85, 45, 255], 30)
-              cv2.putText(img, cnt_str, (width - 250, 125 + (idx*40)), 0, 1, [255, 255, 255], thickness = 2, lineType = cv2.LINE_AA)
+          # vehicle entering count display removed
 
-        for idx, (key, value) in enumerate(object_counter.items()):
-              cnt_str1 = str(key) + ":" +str(value)
-              cv2.line(img, (20,25), (500,25), [85,45,255], 40)
-              cv2.putText(img, f'Numbers of Vehicles Leaving', (11, 35), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)    
-              cv2.line(img, (20,65+ (idx*40)), (127,65+ (idx*40)), [85,45,255], 30)
-              cv2.putText(img, cnt_str1, (11, 75+ (idx*40)), 0, 1, [225, 255, 255], thickness=2, lineType=cv2.LINE_AA)
+          # vehicle leaving count display removed
     
     return img
 
 #La clase especial para la integracion con el Deepsort
 class DetectionPredictor(BasePredictor):
-    CLASS_ID = [0, 1, 2, 3, 5, 7]
+    # Allowed COCO class IDs to process (person, bicycle, car, motorcycle, bus)
+    # COCO mapping: 0:person, 1:bicycle, 2:car, 3:motorcycle, 5:bus
+    CLASS_ID = [0, 1, 2, 3, 5]
 
 
     def get_annotator(self, img):
@@ -476,6 +386,7 @@ class DetectionPredictor(BasePredictor):
 @hydra.main(version_base=None, config_path=str(DEFAULT_CONFIG.parent), config_name=DEFAULT_CONFIG.name)
 def predict(cfg):
     cfg.conf = 0.50
+    cfg.save = False  # Deshabilitar el guardado de salidas (evitar la creación de carpetas 'runs/')
     init_tracker()
     cfg.model = cfg.model or "yolov8n.pt"
     cfg.imgsz = check_imgsz(cfg.imgsz, min_dim=2)  # check image size
