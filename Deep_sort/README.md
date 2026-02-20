@@ -97,4 +97,4 @@ anteriores.
 ---
 ## Anexos 
 Procesamiento del progrma predict_base.py 
-![Figura 1](detect/Deep_sort/runs/predict_base.png)
+![Figura 1](runs/predict_base.png)
