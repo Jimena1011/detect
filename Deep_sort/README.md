@@ -98,3 +98,14 @@ anteriores.
 ## Anexos 
 Procesamiento del progrma predict_base.py 
 ![Figura 1](runs/predict_base.png)
+
+
+Procesamiento del programa predict_contador.py
+![Figura 2](runs/predict_contador.png)
+
+
+Procesamiento del programa predict_spend.py
+![Figura 3](runs/predict_spend.png)
+
+Procesamiento del programa predict1.py
+![Figura 4](runs/predict1.png)
