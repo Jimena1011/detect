@@ -4,10 +4,6 @@ Esta carpeta contiene los **scripts base del proyecto**, utilizados como
 puntos de control para asegurar avances progresivos sin corromper versiones
 anteriores.
 
-Cada archivo representa una **etapa funcional distinta** del sistema, lo que
-permite experimentar, optimizar y agregar nuevas características sin afectar
-la estabilidad de versiones previas.
-
 ---
 
 ## Scripts base del proyecto
@@ -99,3 +95,6 @@ la estabilidad de versiones previas.
 - Pequeños cambios en el video afectan los resultados
 - No existe aún una solución para todos los escenarios hasta el momento
 ---
+## Anexos 
+Procesamiento del progrma predict_base.py 
+![Figura 1](detect/Deep_sort/runs/predict_base.png)

@@ -22,7 +22,7 @@ Desarrollar un sistema capaz de:
 
 ---
 
-## Tecnologías utilizadas
+## Programas utilizados
 
 - **YOLOv8** – detección de objetos
 - **DeepSORT** – seguimiento multiobjeto
@@ -31,10 +31,6 @@ Desarrollar un sistema capaz de:
 - **NumPy** – operaciones matemáticas
 
 ---
-## Versiones principales del sistema
-
-El desarrollo del proyecto se realizó mediante **versiones incrementales**, con el fin de
-no perder avances y poder analizar los resultados de cada enfoque.
 
 ## Limitaciones actuales
 
